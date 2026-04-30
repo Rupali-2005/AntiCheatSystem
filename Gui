@@ -1,0 +1,732 @@
+package anticheat;
+
+import anticheat.rules.CheatRule;
+
+import javax.swing.*;
+import javax.swing.border.*;
+import javax.swing.table.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.io.*;
+import java.text.SimpleDateFormat;
+import java.util.*;
+
+
+public class AntiCheatGUI extends JFrame {
+
+    private final AntiCheatEngine engine;
+    private final ActionQueue     queue;
+    private final GameServer      server;
+
+    private static final Color BG_DARK      = new Color(15,  18,  30);
+    private static final Color BG_PANEL     = new Color(22,  28,  42);
+    private static final Color BG_CARD      = new Color(30,  38,  56);
+    private static final Color BG_HEADER    = new Color(10,  14,  24);
+    private static final Color ACCENT       = new Color(99,  179, 237);
+    private static final Color TEXT_PRIMARY = new Color(226, 232, 240);
+    private static final Color TEXT_DIM     = new Color(148, 163, 184);
+    private static final Color BORDER_CLR   = new Color(45,  55,  72);
+    private static final Color COL_SAFE     = new Color(72,  187, 120);
+    private static final Color COL_SUSP     = new Color(246, 173, 85);
+    private static final Color COL_BLOCKED  = new Color(245, 101, 101);
+    private static final Color BTN_QUEUE    = new Color(56,  130, 200);
+    private static final Color BTN_RESET    = new Color(190, 60,  60);
+    private static final Color BTN_STATUS   = new Color(120, 80,  200);
+    private static final Color BTN_SAVE     = new Color(56,  161, 105);
+
+    private DefaultTableModel tableModel;
+    private JTable            playerTable;
+    private JTextArea         consoleArea;
+    private JTextArea         logArea;
+
+
+    private JTextField   actionPlayerField;
+    private JComboBox<String> actionTypeCombo;
+    private JTextField   actionValueField;
+    private JTextField   lookupPlayerField;
+
+
+    private JTextField cfSpeed, cfScore, cfTeleport, cfAimbot, cfSusp, cfBlocked;
+
+
+    private javax.swing.Timer refreshTimer;
+
+
+    public AntiCheatGUI() {
+        engine = new AntiCheatEngine();
+        queue  = new ActionQueue();
+        server = new GameServer(queue, engine);
+
+        Thread serverThread = new Thread(server, "GameServer-Thread");
+        serverThread.setDaemon(true);
+        serverThread.start();
+
+        buildFrame();
+        buildUI();
+        startAutoRefresh();
+
+        addWindowListener(new WindowAdapter() {
+             public void windowClosing(WindowEvent e) {
+                server.stop();
+                refreshTimer.stop();
+                dispose();
+                System.exit(0);
+            }
+        });
+    }
+
+    private void buildFrame() {
+        setTitle("AntiCheat Engine — Control Panel");
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+        setSize(1140, 740);
+        setMinimumSize(new Dimension(960, 620));
+        setLocationRelativeTo(null);
+        getContentPane().setBackground(BG_DARK);
+    }
+
+
+    private void buildUI() {
+        setLayout(new BorderLayout());
+        add(makeHeader(),    BorderLayout.NORTH);
+        add(makeTabs(),      BorderLayout.CENTER);
+        add(makeConsole(),   BorderLayout.SOUTH);
+    }
+
+
+    private JPanel makeHeader() {
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBackground(BG_HEADER);
+        p.setBorder(new EmptyBorder(12, 20, 12, 20));
+
+        JLabel title = styledLabel("⚔   ANTI-CHEAT ENGINE", 20, Font.BOLD, ACCENT);
+        JLabel sub   = styledLabel("Runtime Rebels  |  Detection Control Panel", 12, Font.PLAIN, TEXT_DIM);
+
+        JPanel left = new JPanel();
+        left.setOpaque(false);
+        left.setLayout(new BoxLayout(left, BoxLayout.Y_AXIS));
+        left.add(title);
+        left.add(Box.createVerticalStrut(2));
+        left.add(sub);
+
+        JLabel badge = styledLabel("●  ENGINE ACTIVE", 12, Font.BOLD, COL_SAFE);
+
+        p.add(left,  BorderLayout.WEST);
+        p.add(badge, BorderLayout.EAST);
+        return p;
+    }
+
+    private JTabbedPane makeTabs() {
+        JTabbedPane tabs = new JTabbedPane(JTabbedPane.TOP);
+        tabs.setBackground(BG_DARK);
+        tabs.setForeground(TEXT_PRIMARY);
+        tabs.setFont(uiFont(13, Font.PLAIN));
+        tabs.addTab("  Dashboard  ",   makeDashboard());
+        tabs.addTab("  Violation Log  ", makeLogPanel());
+        tabs.addTab("  Configuration  ", makeConfigPanel());
+        return tabs;
+    }
+
+    private JPanel makeDashboard() {
+        JPanel p = new JPanel(new BorderLayout(10, 0));
+        p.setBackground(BG_DARK);
+        p.setBorder(new EmptyBorder(12, 12, 12, 12));
+        p.add(makeSidebar(),      BorderLayout.WEST);
+        p.add(makePlayerTable(),  BorderLayout.CENTER);
+        return p;
+    }
+
+    // ── Left sidebar ──
+    private JPanel makeSidebar() {
+        JPanel sidebar = new JPanel();
+        sidebar.setOpaque(false);
+        sidebar.setLayout(new BoxLayout(sidebar, BoxLayout.Y_AXIS));
+        sidebar.setPreferredSize(new Dimension(255, 0));
+
+        sidebar.add(makeSubmitCard());
+        sidebar.add(Box.createVerticalStrut(10));
+        sidebar.add(makePlayerActionsCard());
+        sidebar.add(Box.createVerticalGlue());
+        return sidebar;
+    }
+
+    private JPanel makeSubmitCard() {
+        JPanel card = card("Submit / Queue Action");
+        card.setLayout(new GridBagLayout());
+        GridBagConstraints g = gbc(0, 0, 2);
+
+        actionPlayerField = textField();
+        addRow(card, g, "Player ID", actionPlayerField);
+
+        actionTypeCombo = new JComboBox<>(new String[]{"MOVE", "SHOOT", "SCORE"});
+        styleCombo(actionTypeCombo);
+        addRow(card, g, "Action Type", actionTypeCombo);
+
+        actionValueField = textField();
+        addRow(card, g, "Value  (e.g. 500.0)", actionValueField);
+
+        // two-button row
+        g.gridwidth = 1;
+        g.gridy++;
+        g.gridx = 0;
+        JButton submitBtn = btn("Submit", ACCENT);
+        JButton queueBtn  = btn("Queue",  BTN_QUEUE);
+        card.add(submitBtn, g);
+        g.gridx = 1;
+        card.add(queueBtn, g);
+
+        submitBtn.addActionListener(e -> doSubmit(false));
+        queueBtn.addActionListener(e  -> doSubmit(true));
+        return card;
+    }
+
+    private JPanel makePlayerActionsCard() {
+        JPanel card = card("Player Actions");
+        card.setLayout(new GridBagLayout());
+        GridBagConstraints g = gbc(0, 0, 2);
+
+        lookupPlayerField = textField();
+        addRow(card, g, "Player ID", lookupPlayerField);
+
+        g.gridwidth = 1;
+        g.gridy++;
+        g.gridx = 0;
+        JButton statusBtn = btn("Status",   BTN_STATUS);
+        JButton resetBtn  = btn("Reset",    BTN_RESET);
+        card.add(statusBtn, g);
+        g.gridx = 1;
+        card.add(resetBtn, g);
+
+        g.gridy++;
+        g.gridx = 0;
+        g.gridwidth = 2;
+        JButton allBtn = btn("Show All Players", BTN_SAVE);
+        card.add(allBtn, g);
+
+        statusBtn.addActionListener(e -> doStatus());
+        resetBtn.addActionListener(e  -> doReset());
+        allBtn.addActionListener(e    -> refreshTable());
+        return card;
+    }
+
+    private JPanel makePlayerTable() {
+        JPanel card = card("Player Dashboard");
+        card.setLayout(new BorderLayout(0, 6));
+
+        String[] cols = {"Player ID", "Status", "Risk Score", "Violations", "Last Rule"};
+        tableModel = new DefaultTableModel(cols, 0) {
+             public boolean isCellEditable(int r, int c) { return false; }
+        };
+
+        playerTable = new JTable(tableModel);
+        playerTable.setBackground(BG_CARD);
+        playerTable.setForeground(TEXT_PRIMARY);
+        playerTable.setGridColor(BORDER_CLR);
+        playerTable.setRowHeight(30);
+        playerTable.setFont(uiFont(13, Font.PLAIN));
+        playerTable.setSelectionBackground(new Color(50, 60, 80));
+        playerTable.setSelectionForeground(TEXT_PRIMARY);
+        playerTable.setShowHorizontalLines(true);
+        playerTable.setShowVerticalLines(false);
+        playerTable.setIntercellSpacing(new Dimension(0, 1));
+
+        JTableHeader th = playerTable.getTableHeader();
+        th.setBackground(new Color(20, 28, 44));
+        th.setForeground(ACCENT);
+        th.setFont(uiFont(13, Font.BOLD));
+        th.setReorderingAllowed(false);
+
+        playerTable.getColumnModel().getColumn(1).setCellRenderer(new StatusRenderer());
+
+        playerTable.addMouseListener(new MouseAdapter() {
+             public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2) {
+                    int row = playerTable.getSelectedRow();
+                    if (row >= 0) showDetail((String) tableModel.getValueAt(row, 0));
+                }
+            }
+        });
+
+        JScrollPane scroll = new JScrollPane(playerTable);
+        scroll.getViewport().setBackground(BG_CARD);
+        scroll.setBorder(BorderFactory.createEmptyBorder());
+
+        JLabel hint = styledLabel("  Double-click a row to view full violation details", 11, Font.ITALIC, TEXT_DIM);
+
+        card.add(scroll, BorderLayout.CENTER);
+        card.add(hint,   BorderLayout.SOUTH);
+        return card;
+    }
+
+    private JPanel makeLogPanel() {
+        JPanel p = new JPanel(new BorderLayout(0, 8));
+        p.setBackground(BG_DARK);
+        p.setBorder(new EmptyBorder(12, 12, 12, 12));
+
+        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        toolbar.setOpaque(false);
+        JButton refreshBtn = btn("⟳  Refresh Log", ACCENT);
+        JButton clearBtn   = btn("Clear View",      BTN_RESET);
+        refreshBtn.addActionListener(e -> refreshLog());
+        clearBtn.addActionListener(e   -> logArea.setText(""));
+        toolbar.add(refreshBtn);
+        toolbar.add(clearBtn);
+
+        logArea = new JTextArea();
+        logArea.setBackground(new Color(12, 15, 22));
+        logArea.setForeground(new Color(170, 210, 170));
+        logArea.setFont(new Font("Consolas", Font.PLAIN, 12));
+        logArea.setEditable(false);
+        logArea.setBorder(new EmptyBorder(8, 12, 8, 12));
+
+        JScrollPane scroll = new JScrollPane(logArea);
+        scroll.setBorder(BorderFactory.createLineBorder(BORDER_CLR));
+        scroll.getViewport().setBackground(logArea.getBackground());
+
+        p.add(toolbar, BorderLayout.NORTH);
+        p.add(scroll,  BorderLayout.CENTER);
+
+        refreshLog();   // pre-populate on open
+        return p;
+    }
+
+    private JPanel makeConfigPanel() {
+        JPanel outer = new JPanel(new BorderLayout());
+        outer.setBackground(BG_DARK);
+        outer.setBorder(new EmptyBorder(20, 20, 20, 20));
+
+        JPanel card = card("Detection Thresholds");
+        card.setLayout(new GridBagLayout());
+
+        GridBagConstraints g = new GridBagConstraints();
+        g.insets  = new Insets(7, 10, 7, 10);
+        g.anchor  = GridBagConstraints.WEST;
+
+        Object[][] rows = {
+            {"SPEED_THRESHOLD",    String.valueOf(CheatConfig.SPEED_THRESHOLD),
+                "Max speed value before SpeedHack fires"},
+            {"SCORE_THRESHOLD",    String.valueOf(CheatConfig.SCORE_THRESHOLD),
+                "Max single-action score before ScoreJump fires"},
+            {"TELEPORT_THRESHOLD", String.valueOf(CheatConfig.TELEPORT_THRESHOLD),
+                "Max positional delta before Teleport fires"},
+            {"AIMBOT_WINDOW",      String.valueOf(CheatConfig.AIMBOT_WINDOW),
+                "Consecutive perfect shots required for Aimbot"},
+            {"SUSPICIOUS_SCORE",   String.valueOf(CheatConfig.SUSPICIOUS_SCORE),
+                "Risk score threshold for SUSPICIOUS status"},
+            {"BLOCKED_SCORE",      String.valueOf(CheatConfig.BLOCKED_SCORE),
+                "Risk score threshold for BLOCKED status"},
+        };
+
+        JTextField[] fields = new JTextField[rows.length];
+        for (int i = 0; i < rows.length; i++) {
+            g.gridy = i;
+
+            g.gridx = 0; g.fill = GridBagConstraints.NONE;
+            JLabel key = new JLabel((String) rows[i][0]);
+            key.setFont(new Font("Consolas", Font.BOLD, 13));
+            key.setForeground(TEXT_PRIMARY);
+            key.setPreferredSize(new Dimension(210, 28));
+            card.add(key, g);
+
+            g.gridx = 1; g.fill = GridBagConstraints.HORIZONTAL;
+            fields[i] = textField();
+            fields[i].setText((String) rows[i][1]);
+            fields[i].setPreferredSize(new Dimension(110, 30));
+            card.add(fields[i], g);
+
+            g.gridx = 2; g.fill = GridBagConstraints.NONE;
+            JLabel hint = styledLabel((String) rows[i][2], 11, Font.ITALIC, TEXT_DIM);
+            card.add(hint, g);
+        }
+
+        cfSpeed    = fields[0];
+        cfScore    = fields[1];
+        cfTeleport = fields[2];
+        cfAimbot   = fields[3];
+        cfSusp     = fields[4];
+        cfBlocked  = fields[5];
+
+        g.gridy = rows.length;
+        g.gridx = 0; g.gridwidth = 3;
+        g.fill  = GridBagConstraints.NONE;
+        g.insets = new Insets(18, 10, 8, 10);
+        JButton saveBtn = btn("  Save Configuration", BTN_SAVE);
+        saveBtn.addActionListener(e -> saveConfig());
+        card.add(saveBtn, g);
+
+        JPanel wrap = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        wrap.setBackground(BG_DARK);
+        wrap.add(card);
+
+        outer.add(wrap, BorderLayout.NORTH);
+        return outer;
+    }
+
+    private JPanel makeConsole() {
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBackground(new Color(10, 13, 20));
+        p.setBorder(BorderFactory.createMatteBorder(2, 0, 0, 0, BORDER_CLR));
+        p.setPreferredSize(new Dimension(0, 148));
+
+        // Top bar
+        JPanel topBar = new JPanel(new BorderLayout());
+        topBar.setBackground(new Color(10, 13, 20));
+        JLabel title = styledLabel("  Console Output", 12, Font.BOLD, TEXT_DIM);
+        title.setBorder(new EmptyBorder(5, 8, 5, 8));
+        JButton clearBtn = smallBtn("Clear");
+        clearBtn.addActionListener(e -> consoleArea.setText(""));
+        topBar.add(title,    BorderLayout.WEST);
+        topBar.add(clearBtn, BorderLayout.EAST);
+
+        consoleArea = new JTextArea();
+        consoleArea.setBackground(new Color(10, 13, 20));
+        consoleArea.setForeground(new Color(100, 220, 170));
+        consoleArea.setFont(new Font("Consolas", Font.PLAIN, 12));
+        consoleArea.setEditable(false);
+        consoleArea.setBorder(new EmptyBorder(4, 12, 4, 12));
+
+        JScrollPane scroll = new JScrollPane(consoleArea);
+        scroll.setBorder(BorderFactory.createEmptyBorder());
+        scroll.getViewport().setBackground(consoleArea.getBackground());
+
+        p.add(topBar, BorderLayout.NORTH);
+        p.add(scroll, BorderLayout.CENTER);
+        return p;
+    }
+
+    private void doSubmit(boolean enqueue) {
+        String pid  = actionPlayerField.getText().trim();
+        String type = (String) actionTypeCombo.getSelectedItem();
+        String valS = actionValueField.getText().trim();
+
+        if (pid.isEmpty())  { log("Player ID is required.");    return; }
+        if (valS.isEmpty()) { log("Value is required.");         return; }
+
+        double value;
+        try { value = Double.parseDouble(valS); }
+        catch (NumberFormatException ex) { log("Invalid value: " + valS); return; }
+
+        Action action = new Action(pid, type, System.currentTimeMillis(), value);
+
+        if (enqueue) {
+            if (!ActionValidator.isValid(action)) {
+                log("REJECTED before queuing: " + ActionValidator.getInvalidReason(action));
+                return;
+            }
+            queue.enqueue(action);
+            log("⏎  Queued  [" + pid + "  " + type + "  " + value + "]");
+        } else {
+            RiskResult result = engine.evaluate(action);
+            boolean flagged   = !result.lastRule.equals("CLEAN");
+            String icon       = flagged ? "⚠  FLAGGED" : "✓  CLEAN  ";
+            log(icon + "  |  " + result);
+        }
+
+        SwingUtilities.invokeLater(this::refreshTable);
+    }
+
+    /** Show status in console. */
+    private void doStatus() {
+        String pid = lookupPlayerField.getText().trim();
+        if (pid.isEmpty()) { log("Enter a Player ID first."); return; }
+
+        PlayerRecord rec = engine.getPlayerRecord(pid);
+        if (rec == null) { log("No record found for: " + pid); return; }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("── ").append(rec.playerId).append(" ──\n");
+        sb.append("   Status:     ").append(rec.getStatus()).append("\n");
+        sb.append("   Risk Score: ").append(rec.getRiskScore()).append("\n");
+        sb.append("   Violations: ").append(rec.getViolationCount()).append("\n");
+        for (RuleViolation v : rec.getViolations())
+            sb.append("   • ").append(v).append("\n");
+        log(sb.toString());
+    }
+
+    private void doReset() {
+        String pid = lookupPlayerField.getText().trim();
+        if (pid.isEmpty()) { log("Enter a Player ID to reset."); return; }
+
+        int choice = JOptionPane.showConfirmDialog(
+            this,
+            "Reset all violation data for player \"" + pid + "\"?",
+            "Confirm Reset",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.WARNING_MESSAGE
+        );
+        if (choice == JOptionPane.YES_OPTION) {
+            engine.resetPlayer(pid);
+            log("Reset record for: " + pid);
+            refreshTable();
+        }
+    }
+
+    private void refreshTable() {
+        HashMap<String, PlayerRecord> all = engine.getAllRecords();
+        tableModel.setRowCount(0);
+
+        for (PlayerRecord r : all.values()) {
+            ArrayList<RuleViolation> vs = r.getViolations();
+            String last = vs.isEmpty() ? "—" : vs.get(vs.size() - 1).ruleName;
+            tableModel.addRow(new Object[]{
+                r.playerId,
+                r.getStatus(),
+                r.getRiskScore(),
+                r.getViolationCount(),
+                last
+            });
+        }
+    }
+
+    private void refreshLog() {
+    File file = new File("violations.log");
+    if (!file.exists()) {
+        logArea.setText("No violation log file found (violations.log).");
+        return;
+    }
+    SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+    StringBuilder sb = new StringBuilder();
+    try (BufferedReader br = new BufferedReader(new FileReader(file))) {
+        String line;
+        while ((line = br.readLine()) != null) {
+            if (line.startsWith("---") || line.trim().isEmpty()) {
+                sb.append(line).append("\n");
+                continue;
+            }
+            String[] parts = line.split("\\|");
+            if (parts.length == 5) {
+                try {
+                    long ts = Long.parseLong(parts[3].trim());
+                    parts[3] = sdf.format(new Date(ts));
+                } catch (NumberFormatException ignored) {}
+            }
+            sb.append(String.join(" | ", parts)).append("\n");
+        }
+    } catch (IOException ex) {
+        sb.append("Error reading log: ").append(ex.getMessage());
+    }
+    logArea.setText(sb.toString());
+    logArea.setCaretPosition(logArea.getDocument().getLength());
+}
+
+
+    private void saveConfig() {
+        try {
+            CheatConfig.SPEED_THRESHOLD    = Double.parseDouble(cfSpeed.getText().trim());
+            CheatConfig.SCORE_THRESHOLD    = Double.parseDouble(cfScore.getText().trim());
+            CheatConfig.TELEPORT_THRESHOLD = Double.parseDouble(cfTeleport.getText().trim());
+            CheatConfig.AIMBOT_WINDOW      = (int) Double.parseDouble(cfAimbot.getText().trim());
+            CheatConfig.SUSPICIOUS_SCORE   = (int) Double.parseDouble(cfSusp.getText().trim());
+            CheatConfig.BLOCKED_SCORE      = (int) Double.parseDouble(cfBlocked.getText().trim());
+            log("✓  Configuration saved successfully.");
+            JOptionPane.showMessageDialog(
+                this, "Thresholds updated.", "Saved", JOptionPane.INFORMATION_MESSAGE);
+        } catch (NumberFormatException ex) {
+            log("Invalid config value: " + ex.getMessage());
+            JOptionPane.showMessageDialog(
+                this, "Invalid value: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void showDetail(String pid) {
+        PlayerRecord rec = engine.getPlayerRecord(pid);
+        if (rec == null) return;
+
+        JDialog dlg = new JDialog(this, "Player Detail: " + pid, true);
+        dlg.setSize(520, 380);
+        dlg.setLocationRelativeTo(this);
+        dlg.getContentPane().setBackground(BG_PANEL);
+        dlg.setLayout(new BorderLayout());
+
+        // Mini header
+        JPanel hdr = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 10));
+        hdr.setBackground(BG_DARK);
+
+        Color sc = statusColor(rec.getStatus());
+        hdr.add(styledLabel("  " + pid,                   15, Font.BOLD,  TEXT_PRIMARY));
+        hdr.add(styledLabel("● " + rec.getStatus(),       13, Font.BOLD,  sc));
+        hdr.add(styledLabel("Risk: " + rec.getRiskScore(), 13, Font.PLAIN, TEXT_DIM));
+
+        String[] cols = {"Rule", "Severity", "Weight", "Value", "Time"};
+        DefaultTableModel dm = new DefaultTableModel(cols, 0) {
+             public boolean isCellEditable(int r, int c) { return false; }
+        };
+        SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss");
+        for (RuleViolation v : rec.getViolations())
+            dm.addRow(new Object[]{
+                v.ruleName,
+                v.severity.name(),
+                "+" + v.severity.weight,
+                String.format("%.2f", v.actionValue),
+                sdf.format(new Date(v.timestamp))
+            });
+
+        JTable t = new JTable(dm);
+        t.setBackground(BG_CARD);
+        t.setForeground(TEXT_PRIMARY);
+        t.setGridColor(BORDER_CLR);
+        t.setRowHeight(26);
+        t.setFont(uiFont(12, Font.PLAIN));
+        t.setShowHorizontalLines(true);
+        t.setShowVerticalLines(false);
+        t.getTableHeader().setBackground(BG_DARK);
+        t.getTableHeader().setForeground(ACCENT);
+        t.getTableHeader().setFont(uiFont(12, Font.BOLD));
+
+        t.getColumnModel().getColumn(1).setCellRenderer(new DefaultTableCellRenderer() {
+             public Component getTableCellRendererComponent(
+                    JTable table, Object value, boolean sel, boolean foc, int r, int c) {
+                JLabel lbl = (JLabel) super.getTableCellRendererComponent(
+                    table, value, sel, foc, r, c);
+                lbl.setForeground(severityColor(value != null ? value.toString() : ""));
+                if (!sel) lbl.setBackground(BG_CARD);
+                lbl.setFont(uiFont(12, Font.BOLD));
+                return lbl;
+            }
+        });
+
+        JScrollPane scroll = new JScrollPane(t);
+        scroll.getViewport().setBackground(BG_CARD);
+        scroll.setBorder(BorderFactory.createEmptyBorder());
+
+        dlg.add(hdr,    BorderLayout.NORTH);
+        dlg.add(scroll, BorderLayout.CENTER);
+        dlg.setVisible(true);
+    }
+
+    private void startAutoRefresh() {
+        refreshTimer = new javax.swing.Timer(2500, e -> refreshTable());
+        refreshTimer.start();
+    }
+
+    private void log(String msg) {
+        SwingUtilities.invokeLater(() -> {
+            consoleArea.append(msg + "\n");
+            consoleArea.setCaretPosition(consoleArea.getDocument().getLength());
+        });
+    }
+
+    private Color statusColor(String s) {
+        if ("BLOCKED".equals(s))    return COL_BLOCKED;
+        if ("SUSPICIOUS".equals(s)) return COL_SUSP;
+        return COL_SAFE;
+    }
+
+    private Color severityColor(String s) {
+        switch (s) {
+            case "CRITICAL": return COL_BLOCKED;
+            case "HIGH":     return new Color(240, 140, 60);
+            case "MEDIUM":   return COL_SUSP;
+            default:         return COL_SAFE;
+        }
+    }
+
+    private JPanel card(String title) {
+        JPanel p = new JPanel();
+        p.setBackground(BG_PANEL);
+        TitledBorder tb = BorderFactory.createTitledBorder(
+            BorderFactory.createLineBorder(BORDER_CLR),
+            " " + title + " ",
+            TitledBorder.LEFT, TitledBorder.TOP,
+            uiFont(13, Font.BOLD), ACCENT);
+        p.setBorder(BorderFactory.createCompoundBorder(
+            tb, new EmptyBorder(8, 8, 8, 8)));
+        return p;
+    }
+
+    private JTextField textField() {
+        JTextField f = new JTextField();
+        f.setBackground(BG_CARD);
+        f.setForeground(TEXT_PRIMARY);
+        f.setCaretColor(TEXT_PRIMARY);
+        f.setFont(uiFont(13, Font.PLAIN));
+        f.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(BORDER_CLR),
+            new EmptyBorder(5, 8, 5, 8)));
+        return f;
+    }
+
+    private void styleCombo(JComboBox<String> c) {
+        c.setBackground(BG_CARD);
+        c.setForeground(TEXT_PRIMARY);
+        c.setFont(uiFont(13, Font.PLAIN));
+    }
+
+    private JButton btn(String text, Color bg) {
+        JButton b = new JButton(text);
+        b.setFont(uiFont(12, Font.BOLD));
+        b.setBackground(bg);
+        b.setForeground(Color.WHITE);
+        b.setBorder(new EmptyBorder(7, 14, 7, 14));
+        b.setFocusPainted(false);
+        b.setOpaque(true);
+        b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        Color darker = bg.darker();
+        b.addMouseListener(new MouseAdapter() {
+             public void mouseEntered(MouseEvent e) { b.setBackground(darker); }
+             public void mouseExited(MouseEvent e)  { b.setBackground(bg);     }
+        });
+        return b;
+    }
+
+    private JButton smallBtn(String text) {
+        JButton b = new JButton(text);
+        b.setFont(uiFont(11, Font.PLAIN));
+        b.setForeground(TEXT_DIM);
+        b.setBackground(BG_CARD);
+        b.setBorder(new EmptyBorder(4, 10, 4, 10));
+        b.setFocusPainted(false);
+        b.setOpaque(true);
+        b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        return b;
+    }
+
+    private JLabel styledLabel(String text, int size, int style, Color color) {
+        JLabel l = new JLabel(text);
+        l.setFont(new Font("Segoe UI", style, size));
+        l.setForeground(color);
+        return l;
+    }
+
+    private Font uiFont(int size, int style) {
+        return new Font("Segoe UI", style, size);
+    }
+
+    private GridBagConstraints gbc(int x, int y, int width) {
+        GridBagConstraints g = new GridBagConstraints();
+        g.gridx = x; g.gridy = y; g.gridwidth = width;
+        g.fill  = GridBagConstraints.HORIZONTAL;
+        g.insets = new Insets(4, 4, 4, 4);
+        return g;
+    }
+
+    private void addRow(JPanel card, GridBagConstraints g, String labelText, JComponent comp) {
+        JLabel lbl = new JLabel(labelText);
+        lbl.setFont(uiFont(12, Font.PLAIN));
+        lbl.setForeground(TEXT_DIM);
+        g.gridwidth = 2; g.gridx = 0;
+        card.add(lbl, g);  g.gridy++;
+        card.add(comp, g); g.gridy++;
+    }
+
+    private class StatusRenderer extends DefaultTableCellRenderer {
+        
+        public Component getTableCellRendererComponent(
+                JTable table, Object value, boolean selected,
+                boolean focus, int row, int col) {
+            JLabel cell = (JLabel) super.getTableCellRendererComponent(
+                table, value, selected, focus, row, col);
+            String s = value != null ? value.toString() : "";
+            cell.setFont(uiFont(12, Font.BOLD));
+            cell.setForeground(statusColor(s));
+            if (!selected) cell.setBackground(BG_CARD);
+            return cell;
+        }
+    }
+
+    public static void main(String[] args) {
+        try { UIManager.setLookAndFeel(UIManager.getCrossPlatformLookAndFeelClassName()); }
+        catch (Exception ignored) {}
+
+        SwingUtilities.invokeLater(() -> new AntiCheatGUI().setVisible(true));
+    }
+}
